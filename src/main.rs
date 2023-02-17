@@ -1,4 +1,5 @@
 use clap::Parser;
+use anyhow::{Context, Result};
 
 #[derive(Parser)]
 /// Copy files to a remote machine with sudo on the other end
@@ -11,10 +12,13 @@ struct Secp {
     destination: String,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args = Secp::parse();
 
-    let content = std::fs::read_to_string(&args.source).expect("not able to read file");
+    let content =  std::fs::read_to_string(&args.source)
+        .with_context(|| format!("not able to read file `{}`", &args.source))?;
+
     println!("{}", content);
+    Ok(())
 
 }
