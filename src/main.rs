@@ -6,6 +6,7 @@ use log::{info,warn};
 /// Copy files to a remote machine with sudo on the other end
 struct Secp {
     /// The user to become on the remote host. Think sudo -u <sudo_user>
+    #[arg(short='u', long)]
     sudo_user: String,
     /// File source to copy
     source: String,
