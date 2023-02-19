@@ -6,17 +6,30 @@ use std::io::prelude::*;
 use std::net::TcpStream;
 use ssh2::Session;
 
+use std::sync::mpsc;
+use std::thread;
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
 #[derive(Parser)]
 /// Copy files to a remote machine with sudo on the other end
 struct Secp {
     /// The user to become on the remote host. Think sudo -u <sudo_user>
     #[arg(short='u', long)]
     sudo_user: String,
+    /// SSH and sudo password for connection user
+    #[arg(short='p', long)]
+    password: String,
     /// File source to copy
     source: String,
     /// File destination. Format <user>@<host>:<path>
     destination: String,
 }
+
+/* Our magic messages that we are looking for in stdin and stderr */
+
+const PASSWORDPROMPT: &str = "GIMMEYOURPASSWORD";
+const ESCALATIONSUCCEDED: &str = "LETSGODOOURTHING";
 
 fn main() -> Result<()> {
     env_logger::init();
@@ -27,7 +40,9 @@ fn main() -> Result<()> {
     let content =  std::fs::read_to_string(&args.source)
         .with_context(|| format!("not able to read file `{}`", &args.source))?;
 
-    // println!("{}", content);
+    let iat = args.destination.find('@');
+    //let icolon = args.destination.find(':');
+    let user = &args.destination[..iat.unwrap()];
 
 
     // SSH connect
@@ -36,43 +51,39 @@ fn main() -> Result<()> {
     sess.set_tcp_stream(tcp);
     sess.handshake().unwrap();
 
-    // groke has sudo NOPASSWD
-    //sess.userauth_password("groke","grokepwd").unwrap();
 
     // joxter requires pwd for sudo
-    sess.userauth_password("joxter","joxterpwd").unwrap();
+    sess.userauth_password(user,&args.password).unwrap();
 
     let mut chan = sess.channel_session().unwrap();
-    // chan.handle_extended_data(ssh2::ExtendedData::Merge).unwrap();
-    let mut stderr = chan.stderr();
+    chan.handle_extended_data(ssh2::ExtendedData::Merge).unwrap();
 
-
-    // do sudo all the things!
     info!("firing command");
-    chan.exec("echo -n 'BEGIN' && sudo -S -H -p 'GIMMEYOURPWDPLEASE' /bin/sh -c '/usr/bin/scp -tr ~/'").unwrap();
-
+    chan.exec(&format!("echo -n 'BEGIN' && sudo -S -H -p '{}' /bin/sh -c 'echo -n {} && /usr/bin/scp -tr ~/'", PASSWORDPROMPT, ESCALATIONSUCCEDED)).unwrap();
     info!("I'm gonna do it");
 
-    // lets read stderr to see if sudo is up to something
-    let mut serr = String::new();
+
+    let mut out = String::new();
     loop {
-        let mut buferr = [0u8; 1024];
-        match stderr.read(&mut buferr){
+        let mut buf = [0u8; 1024];
+        match chan.read(&mut buf){
             Ok(0) => {
-                info!("got EOF on the channel");
+                info!("eof in session");
                 break;
             },
             Ok(c) => {
-                serr.push_str(&String::from_utf8_lossy(&buferr[..c]));
-                info!("got {} bytes in stderr", c);
 
-                if serr.ends_with("GIMMEYOURPWDPLEASE") {
-                    info!("time to input password");
-                    chan.write(b"joxterpwd\n").unwrap();
+                let s = String::from_utf8_lossy(&buf[..c]);
+                out.push_str(&s);
+
+                info!("got {} bytes from session: {}", c, s);
+
+                if out.ends_with(ESCALATIONSUCCEDED) {
+                    info!("Im done!");
                     break;
-                } else if serr.ends_with("WEMADEIT") {
-                    info!("ready to continue");
-                    break;
+                } else if out.ends_with(PASSWORDPROMPT) {
+                    info!("writing password");
+                    chan.write_fmt(format_args!("{}\n",&args.password)).unwrap();
                 }
             }
             Err(e) => {
@@ -80,9 +91,6 @@ fn main() -> Result<()> {
             }
         }
     }
-
-    info!("stderr is {}", serr);
-
 
     // lets pretend that the above implemenatation works nicely and that we now are the requested user
     // lets start scp in recieve mode on remote
@@ -93,10 +101,11 @@ fn main() -> Result<()> {
 
     info!("scp started, im gonna send some data");
 
-    let content = b"12345";
 
-    write!(chan, "C0644 {} newfile\n", content.len()).unwrap();
-    chan.write(content).unwrap();
+    let filename: String = format!("newfile-{}", SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
+
+    write!(chan, "C0644 {} {}\n", content.len(), filename).unwrap();
+    chan.write_fmt(format_args!("{}",content)).unwrap();
     write!(chan, "\x00").unwrap();
 
 

@@ -5,6 +5,7 @@ Here are my notes and collected links:
 
 * https://rust-cli.github.io/book/tutorial/setup.html
 * https://doc.rust-lang.org/stable/rust-by-example/
+* https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html
 
 ## SSH Bits
 
